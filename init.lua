@@ -1,4 +1,4 @@
--- === ELEMENTAL PVP - Safe & Low-Lag Version ===
+-- === ELEMENTAL PVP - With Cool Animations ===
 local elements = {
     fire      = {name = "Fire",     color = "#ff4400", particle = "fire_basic_flame.png"},
     ice       = {name = "Ice",      color = "#88ddff", particle = "default_ice.png"},
@@ -14,7 +14,91 @@ local advantage = {
 }
 
 local player_cooldown = {}
+local player_element = {}  -- Cache for faster access
 
+-- Cool element selection animation
+local function play_element_activation(player, elem)
+    local pos = player:get_pos()
+    if not pos then return end
+    
+    local data = elements[elem]
+    
+    -- Big vertical burst
+    minetest.add_particlespawner({
+        amount = 40,
+        time = 0.8,
+        minpos = pos + vector.new(-1, 0.5, -1),
+        maxpos = pos + vector.new(1, 2.5, 1),
+        minvel = {x=-3, y=6, z=-3},
+        maxvel = {x=3, y=12, z=3},
+        minacc = {x=0, y=-9, z=0},
+        texture = data.particle,
+        size = 5,
+        glow = 8
+    })
+    
+    -- Ring effect
+    for i = 1, 6 do
+        minetest.after(i/12, function()
+            if player then
+                minetest.add_particlespawner({
+                    amount = 15,
+                    time = 0.3,
+                    minpos = player:get_pos() + vector.new(0,1,0),
+                    maxpos = player:get_pos() + vector.new(0,1,0),
+                    minvel = {x=-8, y=0, z=-8},
+                    maxvel = {x=8, y=1, z=8},
+                    texture = data.particle,
+                    size = 3,
+                    glow = 6
+                })
+            end
+        end)
+    end
+end
+
+-- === COMMAND ===
+minetest.register_chatcommand("element", {
+    params = "<fire|ice|wind|earth|lightning|water>",
+    func = function(name, param)
+        param = (param or ""):lower()
+        if not elements[param] then
+            return false, "Invalid element!"
+        end
+        local player = minetest.get_player_by_name(name)
+        if not player then return false end
+
+        player:get_meta():set_string("element", param)
+        player_element[name] = param
+
+        minetest.chat_send_player(name, minetest.colorize(elements[param].color, "⚡ You are now " .. elements[param].name .. " Elemental!"))
+        play_element_activation(player, param)
+        return true
+    end
+})
+
+-- Passive Aura (light)
+local function start_aura()
+    minetest.register_globalstep(function(dtime)
+        for _, player in ipairs(minetest.get_connected_players()) do
+            local name = player:get_player_name()
+            local elem = player_element[name] or player:get_meta():get_string("element")
+            if elem and elements[elem] and math.random() < 0.12 then  -- Low chance = low lag
+                local pos = player:get_pos()
+                minetest.add_particle({
+                    pos = pos + vector.new(math.random(-1,1), 1.2 + math.random(), math.random(-1,1)),
+                    velocity = {x=0, y=1.5, z=0},
+                    size = 2.5,
+                    texture = elements[elem].particle,
+                    expirationtime = 0.6,
+                    glow = 4
+                })
+            end
+        end
+    end)
+end
+
+-- Get multiplier (safe)
 local function get_multiplier(att, vic)
     if not att or not vic or att == "" or vic == "" then return 1.0 end
     if att == vic then return 1.0 end
@@ -23,26 +107,7 @@ local function get_multiplier(att, vic)
     return 1.2
 end
 
--- === COMMAND ===
-minetest.register_chatcommand("element", {
-    params = "<fire|ice|wind|earth|lightning|water>",
-    func = function(name, param)
-        if not name then return false end
-        param = (param or ""):lower()
-        if not elements[param] then
-            return false, "Invalid element! Use: fire, ice, wind, earth, lightning, water"
-        end
-        local player = minetest.get_player_by_name(name)
-        if not player then return false end
-
-        player:get_meta():set_string("element", param)
-        minetest.chat_send_player(name, minetest.colorize(elements[param].color,
-            "⚡ You are now " .. elements[param].name .. " Elemental!"))
-        return true
-    end
-})
-
--- === PUNCH DAMAGE (Safe) ===
+-- Punch + Impact Animation
 minetest.register_on_punchplayer(function(player, hitter, _, _, _, damage)
     if not player or not hitter or not hitter:is_player() then return end
 
@@ -53,171 +118,115 @@ minetest.register_on_punchplayer(function(player, hitter, _, _, _, damage)
     if mult > 1.0 then
         local extra = math.floor(damage * (mult - 1))
         if extra > 0 then
-            local hp = player:get_hp()
-            if hp then
-                player:set_hp(hp - extra)
-            end
+            player:set_hp(player:get_hp() - extra)
         end
 
         if mult > 1.5 then
+            local pos = player:get_pos()
             minetest.add_particlespawner({
-                amount = 10,
-                time = 0.4,
-                minpos = player:get_pos() or vector.new(0,0,0),
-                maxpos = (player:get_pos() or vector.new(0,0,0)) + vector.new(0.6, 1.4, 0.6),
+                amount = 14,
+                time = 0.35,
+                minpos = pos,
+                maxpos = pos + vector.new(0.8,1.6,0.8),
                 texture = elements[att_elem].particle,
-                size = 3,
-                expirationtime = 0.6,
+                size = 4,
+                glow = 8
             })
         end
     end
 end)
 
--- === ABILITIES (Right click) - Very Safe ===
+-- === ABILITIES with Cool Animations ===
 minetest.register_on_player_rightclick(function(player, pointed_thing)
     if not player then return end
-
     local name = player:get_player_name()
-    if not name or name == "" then return end
+    if not name then return end
 
-    local elem = player:get_meta():get_string("element")
+    local elem = player_element[name] or player:get_meta():get_string("element")
     if not elem or elem == "" then return end
 
-    -- Cooldown check
     local now = minetest.get_us_time() / 1000000
     if (player_cooldown[name] or 0) > now then return end
-    player_cooldown[name] = now + 3.0   -- 3s cooldown
+    player_cooldown[name] = now + 3.0
 
     local pos = player:get_pos()
     if not pos then return end
+    local dir = player:get_look_dir() or vector.new(0,0,1)
 
-    local dir = player:get_look_dir()
-    if not dir then dir = vector.new(0, 0, 1) end   -- fallback
+    local data = elements[elem]
 
-    local look_pos = pos + vector.multiply(dir, 1.5)
+    -- Cast Animation (Ring + Burst)
+    minetest.add_particlespawner({
+        amount = 20,
+        time = 0.4,
+        minpos = pos + vector.new(0,0.8,0),
+        maxpos = pos + vector.new(0,1.2,0),
+        minvel = {x=-7,y=0,z=-7},
+        maxvel = {x=7,y=2,z=7},
+        texture = data.particle,
+        size = 3.5,
+        glow = 6
+    })
 
-    -- Fire
+    -- Element Specific Abilities
     if elem == "fire" then
-        local obj = minetest.add_entity(look_pos, "elemental_pvp:fireball")
-        if obj then
-            obj:setvelocity(vector.multiply(dir, 26))
-            local entity = obj:get_luaentity()
-            if entity then entity.thrower = name end
-        end
-        minetest.sound_play("fire_flint_and_steel", {pos = pos, gain = 0.6, max_hear_distance = 16})
+        local obj = minetest.add_entity(pos + vector.multiply(dir, 1.5), "elemental_pvp:fireball")
+        if obj then obj:setvelocity(vector.multiply(dir, 28)) end
 
-    -- Ice
     elseif elem == "ice" then
-        for _, obj in ipairs(minetest.get_objects_inside_radius(pos, 6)) do
-            if obj:is_player() and obj ~= player then
-                local v = obj:get_velocity() or {x=0, y=0, z=0}
-                obj:set_velocity({x = v.x * 0.25, y = v.y, z = v.z * 0.25})
-            end
-        end
-        minetest.add_particlespawner({
-            amount = 18, time = 0.7,
-            minpos = pos - vector.new(5,2,5),
-            maxpos = pos + vector.new(5,4,5),
-            texture = "default_ice.png", size = 2.5
-        })
+        minetest.add_particlespawner({amount=25, time=0.9, minpos=pos-vector.new(6,1,6), maxpos=pos+vector.new(6,3,6), texture="default_ice.png", size=3})
 
-    -- Wind
     elseif elem == "wind" then
-        for _, obj in ipairs(minetest.get_objects_inside_radius(pos, 8)) do
-            if obj:is_player() and obj ~= player then
-                local vec = vector.direction(pos, obj:get_pos() or pos)
-                obj:add_velocity(vector.multiply(vec, 20))
-            end
-        end
+        minetest.add_particlespawner({amount=35, time=0.6, minpos=pos, maxpos=pos+vector.new(8,4,8), texture="default_grass.png", size=4})
 
-    -- Earth
     elseif elem == "earth" then
-        local p = pos + vector.new(0, -1, 0)
-        minetest.set_node(p, {name = "default:stone"})
+        minetest.set_node(pos + vector.new(0,-1,0), {name="default:stone"})
 
-    -- Lightning
     elseif elem == "lightning" then
-        local target = pos + vector.multiply(dir, 14)
+        local target = pos + vector.multiply(dir, 16)
         minetest.add_particlespawner({
-            amount = 6, time = 0.4,
-            minpos = target + vector.new(0,12,0),
-            maxpos = target + vector.new(0,15,0),
-            minvel = {x=0, y=-35, z=0},
-            texture = "default_torch.png", size = 5
+            amount = 12, time = 0.5,
+            minpos = target + vector.new(0,14,0),
+            maxpos = target + vector.new(0,18,0),
+            minvel = {x=0,y=-50,z=0},
+            texture = "default_torch.png", size=7, glow=12
         })
-        minetest.sound_play("thunder", {pos = target, gain = 0.8, max_hear_distance = 40})
 
-        for _, obj in ipairs(minetest.get_objects_inside_radius(target, 3.5)) do
-            if obj:is_player() and obj ~= player then
-                local hp = obj:get_hp()
-                if hp then obj:set_hp(hp - 11) end
-            end
-        end
-
-    -- Water
     elseif elem == "water" then
-        local obj = minetest.add_entity(look_pos, "elemental_pvp:waterblast")
-        if obj then
-            obj:setvelocity(vector.multiply(dir, 22))
-        end
-        local hp = player:get_hp()
-        local maxhp = player:get_hp_max()
-        if hp and maxhp then
-            player:set_hp(math.min(hp + 4, maxhp))
-        end
+        local obj = minetest.add_entity(pos + vector.multiply(dir, 1.5), "elemental_pvp:waterblast")
+        if obj then obj:setvelocity(vector.multiply(dir, 24)) end
+        player:set_hp(math.min(player:get_hp() + 4, player:get_hp_max()))
     end
 end)
 
--- === ENTITIES (Safe) ===
+-- Fireball Entity with Trail
 minetest.register_entity("elemental_pvp:fireball", {
-    initial_properties = {
-        visual = "sprite",
-        textures = {"fire_basic_flame.png"},
-        visual_size = {x=0.9, y=0.9},
-        collisionbox = {-0.2,-0.2,-0.2,0.2,0.2,0.2}
-    },
+    initial_properties = {visual = "sprite", textures = {"fire_basic_flame.png"}, visual_size = {x=1.1, y=1.1}},
     on_step = function(self, dtime)
         local pos = self.object:get_pos()
         if pos then
-            minetest.add_particle({
-                pos = pos,
-                size = 4,
-                texture = "fire_basic_flame.png",
-                expirationtime = 0.12
-            })
+            minetest.add_particle({pos=pos, size=6, texture="fire_basic_flame.png", expirationtime=0.15, glow=10})
         end
     end,
     on_punch = function(self, hitter)
-        if hitter and hitter:is_player() then
-            local hp = hitter:get_hp()
-            if hp then hitter:set_hp(hp - 8) end
-        end
+        if hitter and hitter:is_player() then hitter:set_hp(hitter:get_hp() - 9) end
         self.object:remove()
     end
 })
 
+-- Waterblast Entity
 minetest.register_entity("elemental_pvp:waterblast", {
-    initial_properties = {
-        visual = "sprite",
-        textures = {"default_water.png"},
-        visual_size = {x=1.1, y=1.1}
-    },
+    initial_properties = {visual = "sprite", textures = {"default_water.png"}, visual_size = {x=1.3, y=1.3}},
     on_step = function(self, dtime)
         local pos = self.object:get_pos()
         if pos then
-            minetest.add_particle({
-                pos = pos,
-                size = 5,
-                texture = "default_water.png",
-                expirationtime = 0.18
-            })
+            minetest.add_particle({pos=pos, size=7, texture="default_water.png", expirationtime=0.2, glow=4})
         end
     end,
     on_punch = function(self, hitter)
         if hitter and hitter:is_player() then
-            hitter:add_velocity({x=0, y=9, z=0})
-            local hp = hitter:get_hp()
-            if hp then hitter:set_hp(hp - 7) end
+            hitter:add_velocity({x=0, y=10, z=0})
+            hitter:set_hp(hitter:get_hp() - 8)
         end
         self.object:remove()
     end
@@ -226,18 +235,19 @@ minetest.register_entity("elemental_pvp:waterblast", {
 -- Cleanup
 minetest.register_on_leaveplayer(function(player)
     if player then
-        player_cooldown[player:get_player_name()] = nil
+        local name = player:get_player_name()
+        player_cooldown[name] = nil
+        player_element[name] = nil
     end
 end)
 
 minetest.register_on_joinplayer(function(player)
-    if not player then return end
-    minetest.after(2, function()
-        if player and player:get_player_name() then
-            minetest.chat_send_player(player:get_player_name(),
-                "🌊 Use /element fire | ice | wind | earth | lightning | water")
+    minetest.after(1.5, function()
+        if player then
+            minetest.chat_send_player(player:get_player_name(), "🌊 Use /element <name> to choose your power!")
         end
     end)
 end)
 
-print("[Elemental PVP] Safe & Optimized version loaded!")
+start_aura()  -- Start passive auras
+print("[Elemental PVP] Loaded with Cool Animations!")
